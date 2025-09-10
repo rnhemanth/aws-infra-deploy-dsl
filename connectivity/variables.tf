@@ -7,9 +7,3 @@ variable "aws_vpc_id" {
   description = "AWS VPC ID"
   type        = string
 }
-
-variable "region" {
-  description = "AWS region"
-  type        = string
-  default     = "eu-west-2"
-}
