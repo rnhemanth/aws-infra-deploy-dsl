@@ -14,21 +14,25 @@ provider "aws" {
 variable "agent_ip" {
   description = "DataSync agent IP address"
   type        = string
+  default     = ""
 }
 
 variable "windows_ip" {
   description = "Windows server IP address"
   type        = string
+  default     = ""
 }
 
 variable "general_bucket" {
   description = "General files S3 bucket name"
   type        = string
+  default     = ""
 }
 
 variable "certs_bucket" {
   description = "Certificates S3 bucket name"
   type        = string
+  default     = ""
 }
 
 # Get the agent ARN (assumes it's already activated)
