@@ -49,7 +49,7 @@ jobs:
           done
       
       - name: Monitor Transfer
-  run: |
+        run: |
     # Get execution ARNs from previous step
     EXEC_ARNS=$(env | grep "execution_arn_" | cut -d'=' -f2)
     
