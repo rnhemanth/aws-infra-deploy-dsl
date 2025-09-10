@@ -38,46 +38,98 @@ jobs:
       
       - name: Destroy DataSync Configuration
         working-directory: ./datasync-configuration
-        continue-on-error: true
         run: |
-          terraform init || true
-          terraform destroy -auto-approve \
-            -var="agent_ip=dummy" \
-            -var="windows_ip=dummy" \
-            -var="general_bucket=dummy" \
-            -var="certs_bucket=dummy" || true
+          terraform init || echo "Init failed, continuing..."
+          if [ -f terraform.tfstate ] && [ -s terraform.tfstate ]; then
+            terraform destroy -auto-approve \
+              -var="agent_ip=dummy" \
+              -var="windows_ip=dummy" \
+              -var="general_bucket=dummy" \
+              -var="certs_bucket=dummy" || echo "DataSync destroy failed, continuing..."
+          else
+            echo "No DataSync state found, skipping..."
+          fi
       
       - name: Destroy Connectivity
         working-directory: ./connectivity
-        continue-on-error: true
         run: |
-          terraform init || true
-          terraform destroy -auto-approve \
-            -var="onprem_vpc_id=dummy" \
-            -var="aws_vpc_id=dummy" || true
+          terraform init || echo "Init failed, continuing..."
+          if [ -f terraform.tfstate ] && [ -s terraform.tfstate ]; then
+            terraform destroy -auto-approve \
+              -var="onprem_vpc_id=dummy" \
+              -var="aws_vpc_id=dummy" || echo "Connectivity destroy failed, continuing..."
+          else
+            echo "No connectivity state found, skipping..."
+          fi
       
       - name: Destroy AWS Infrastructure
         if: github.event.inputs.destroy_aws == 'true'
         working-directory: ./aws-infrastructure
-        continue-on-error: true
         run: |
-          terraform init || true
-          terraform destroy -auto-approve \
-            -var="environment=test" || true
+          terraform init || echo "Init failed, continuing..."
+          if [ -f terraform.tfstate ] && [ -s terraform.tfstate ]; then
+            terraform destroy -auto-approve \
+              -var="environment=test" || echo "AWS infrastructure destroy failed, continuing..."
+          else
+            echo "No AWS state found, skipping..."
+          fi
       
       - name: Destroy On-Prem Simulation
         if: github.event.inputs.destroy_onprem == 'true'
         working-directory: ./on-premises
-        continue-on-error: true
         run: |
-          terraform init || true
-          terraform destroy -auto-approve || true
+          terraform init || echo "Init failed, continuing..."
+          if [ -f terraform.tfstate ] && [ -s terraform.tfstate ]; then
+            terraform destroy -auto-approve || echo "On-prem destroy failed, continuing..."
+          else
+            echo "No on-prem state found, skipping..."
+          fi
       
-      - name: Manual Cleanup Reminder
+      - name: Force Cleanup EC2 Instances
         run: |
-          echo "If any resources remain, check AWS Console for:"
-          echo "- EC2 instances"
-          echo "- VPCs and networking"
-          echo "- S3 buckets"
-          echo "- IAM roles"
-          echo "- KMS keys"
+          echo "Force terminating any remaining test instances..."
+          aws ec2 describe-instances \
+            --filters "Name=tag:Purpose,Values=DSL-Migration-Testing" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+            --query 'Reservations[].Instances[].InstanceId' \
+            --output text | xargs -r aws ec2 terminate-instances --instance-ids || echo "No instances to terminate"
+          
+          # Also check for instances with test names
+          aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=test-*" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+            --query 'Reservations[].Instances[].InstanceId' \
+            --output text | xargs -r aws ec2 terminate-instances --instance-ids || echo "No test instances to terminate"
+      
+      - name: Force Cleanup S3 Buckets
+        run: |
+          echo "Force deleting test S3 buckets..."
+          aws s3 ls | grep -E '(dsl|test)' | awk '{print $3}' | while read bucket; do
+            echo "Deleting bucket: $bucket"
+            aws s3 rb s3://$bucket --force || echo "Failed to delete $bucket"
+          done
+      
+      - name: Force Cleanup VPCs
+        run: |
+          echo "Force deleting test VPCs..."
+          # Delete test VPCs by CIDR or tags
+          aws ec2 describe-vpcs \
+            --filters "Name=tag:Purpose,Values=DSL-Migration-Testing" \
+            --query 'Vpcs[].VpcId' \
+            --output text | xargs -r -I {} aws ec2 delete-vpc --vpc-id {} || echo "VPC cleanup failed"
+      
+      - name: Cleanup Summary
+        run: |
+          echo "Cleanup completed. Checking for remaining resources..."
+          echo "=== Remaining EC2 Instances ==="
+          aws ec2 describe-instances \
+            --filters "Name=tag:Purpose,Values=DSL-Migration-Testing" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+            --query 'Reservations[].Instances[].[InstanceId,State.Name,Tags[?Key==`Name`].Value|[0]]' \
+            --output table || echo "No instances found"
+          
+          echo "=== Remaining S3 Buckets ==="
+          aws s3 ls | grep -E '(dsl|test)' || echo "No test buckets found"
+          
+          echo "=== Remaining VPCs ==="
+          aws ec2 describe-vpcs \
+            --filters "Name=tag:Purpose,Values=DSL-Migration-Testing" \
+            --query 'Vpcs[].[VpcId,CidrBlock,Tags[?Key==`Name`].Value|[0]]' \
+            --output table || echo "No test VPCs found"
