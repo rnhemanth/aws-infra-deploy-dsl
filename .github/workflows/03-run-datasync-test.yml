@@ -49,23 +49,30 @@ jobs:
           done
       
       - name: Monitor Transfer
-        run: |
-          # Monitor all started executions
-          # This would loop and check status
-          echo "Monitoring transfers..."
-          
-      - name: Verify Results
-        run: |
-          echo "## Transfer Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # List files in S3
-          if [ "${{ github.event.inputs.task_type }}" != "certificates" ]; then
-            echo "### General Bucket Contents:" >> $GITHUB_STEP_SUMMARY
-            aws s3 ls s3://test-dsl-general-* --recursive | head -20 >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [ "${{ github.event.inputs.task_type }}" != "general-files" ]; then
-            echo "### Certificates Bucket Contents:" >> $GITHUB_STEP_SUMMARY
-            aws s3 ls s3://test-dsl-secure-* --recursive | head -20 >> $GITHUB_STEP_SUMMARY
-          fi
+  run: |
+    # Get execution ARNs from previous step
+    EXEC_ARNS=$(env | grep "execution_arn_" | cut -d'=' -f2)
+    
+    for EXEC_ARN in $EXEC_ARNS; do
+      echo "Monitoring execution: $EXEC_ARN"
+      
+      # Loop until task completes
+      while true; do
+        STATUS=$(aws datasync describe-task-execution \
+          --task-execution-arn $EXEC_ARN \
+          --query 'Status' --output text)
+        
+        echo "Status: $STATUS"
+        
+        if [[ "$STATUS" == "SUCCESS" ]] || [[ "$STATUS" == "ERROR" ]]; then
+          # Get final statistics
+          aws datasync describe-task-execution \
+            --task-execution-arn $EXEC_ARN \
+            --query '{Status:Status, BytesTransferred:BytesTransferred, FilesTransferred:FilesTransferred}' \
+            --output table
+          break
+        fi
+        
+        sleep 30
+      done
+    done

@@ -47,3 +47,25 @@ resource "aws_iam_role_policy" "datasync_s3" {
     ]
   })
 }
+
+# Add KMS permissions to existing policy
+resource "aws_iam_role_policy" "datasync_kms" {
+  name = "datasync-kms-access"
+  role = aws_iam_role.datasync.id
+  
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey",
+          "kms:CreateGrant",
+          "kms:DescribeKey"
+        ]
+        Resource = [aws_kms_key.certificates.arn]
+      }
+    ]
+  })
+}
