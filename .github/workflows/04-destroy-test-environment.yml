@@ -1,0 +1,58 @@
+name: Destroy Test Environment
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DESTROY to confirm'
+        required: true
+      destroy_aws:
+        description: 'Destroy AWS infrastructure'
+        type: boolean
+        default: true
+      destroy_onprem:
+        description: 'Destroy on-prem simulation'
+        type: boolean
+        default: true
+
+jobs:
+  destroy:
+    name: Destroy Infrastructure
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'DESTROY'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-2
+      
+      - name: Destroy DataSync Configuration
+        working-directory: ./datasync-configuration
+        run: |
+          terraform init
+          terraform destroy -auto-approve || true
+      
+      - name: Destroy Connectivity
+        working-directory: ./connectivity
+        run: |
+          terraform init
+          terraform destroy -auto-approve || true
+      
+      - name: Destroy AWS Infrastructure
+        if: github.event.inputs.destroy_aws == 'true'
+        working-directory: ./aws-infrastructure
+        run: |
+          terraform init
+          terraform destroy -auto-approve
+      
+      - name: Destroy On-Prem Simulation
+        if: github.event.inputs.destroy_onprem == 'true'
+        working-directory: ./on-premises
+        run: |
+          terraform init
+          terraform destroy -auto-approve

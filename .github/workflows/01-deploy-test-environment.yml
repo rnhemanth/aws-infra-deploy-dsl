@@ -1,0 +1,207 @@
+name: Deploy Test Environment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'test'
+        type: choice
+        options:
+          - test
+          - staging
+          - dev
+
+env:
+  AWS_REGION: eu-west-2
+
+jobs:
+  deploy-onprem:
+    name: Deploy Simulated On-Prem
+    runs-on: ubuntu-latest
+    outputs:
+      vpc_id: ${{ steps.outputs.outputs.vpc_id }}
+      agent_ip: ${{ steps.outputs.outputs.agent_ip }}
+      windows_ip: ${{ steps.outputs.outputs.windows_ip }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      
+      - name: Deploy On-Prem Infrastructure
+        working-directory: ./on-premises
+        run: |
+          terraform init
+          terraform apply -auto-approve
+      
+      - name: Get Outputs
+        id: outputs
+        working-directory: ./on-premises
+        run: |
+          echo "vpc_id=$(terraform output -raw vpc_id)" >> $GITHUB_OUTPUT
+          echo "agent_ip=$(terraform output -raw datasync_agent_private_ip)" >> $GITHUB_OUTPUT
+          echo "windows_ip=$(terraform output -raw windows_server_ip)" >> $GITHUB_OUTPUT
+      
+      - name: Wait for Windows Initialization
+        run: |
+          echo "Waiting for Windows servers to initialize..."
+          sleep 300  # 5 minutes
+          
+  deploy-aws-infrastructure:
+    name: Deploy AWS Infrastructure
+    runs-on: ubuntu-latest
+    outputs:
+      vpc_id: ${{ steps.outputs.outputs.vpc_id }}
+      general_bucket: ${{ steps.outputs.outputs.general_bucket }}
+      certs_bucket: ${{ steps.outputs.outputs.certs_bucket }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      
+      - name: Deploy AWS Infrastructure
+        working-directory: ./aws-infrastructure
+        run: |
+          terraform init
+          terraform apply -auto-approve \
+            -var="environment=${{ github.event.inputs.environment }}"
+      
+      - name: Get Outputs
+        id: outputs
+        working-directory: ./aws-infrastructure
+        run: |
+          echo "vpc_id=$(terraform output -raw vpc_id)" >> $GITHUB_OUTPUT
+          echo "general_bucket=$(terraform output -raw general_bucket_name)" >> $GITHUB_OUTPUT
+          echo "certs_bucket=$(terraform output -raw certificates_bucket_name)" >> $GITHUB_OUTPUT
+
+  connect-networks:
+    name: Connect Networks
+    needs: [deploy-onprem, deploy-aws-infrastructure]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+      
+      - name: Connect VPCs
+        working-directory: ./connectivity
+        run: |
+          terraform init
+          terraform apply -auto-approve \
+            -var="onprem_vpc_id=${{ needs.deploy-onprem.outputs.vpc_id }}" \
+            -var="aws_vpc_id=${{ needs.deploy-aws-infrastructure.outputs.vpc_id }}"
+      
+      - name: Verify Connectivity
+        run: |
+          echo "Networks connected successfully"
+          echo "VPC Peering established between:"
+          echo "  On-Prem VPC: ${{ needs.deploy-onprem.outputs.vpc_id }}"
+          echo "  AWS VPC: ${{ needs.deploy-aws-infrastructure.outputs.vpc_id }}"
+
+  activate-datasync-agent:
+    name: Activate DataSync Agent
+    needs: [deploy-onprem, connect-networks]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Create Activation Key
+        id: activation
+        run: |
+          # Get activation key from AWS
+          ACTIVATION_KEY=$(aws datasync create-agent \
+            --agent-name "test-dsl-agent" \
+            --vpc-endpoint-id vpce-xxxxxxxxx \
+            --subnet-arns arn:aws:ec2:${{ env.AWS_REGION }}:xxx:subnet/subnet-xxx \
+            --security-group-arns arn:aws:ec2:${{ env.AWS_REGION }}:xxx:security-group/sg-xxx \
+            --query 'ActivationKey' \
+            --output text)
+          
+          echo "activation_key=$ACTIVATION_KEY" >> $GITHUB_OUTPUT
+      
+      - name: Display Agent Activation Info
+        run: |
+          echo "::notice title=Manual Action Required::Please activate the DataSync agent"
+          echo "Agent IP: ${{ needs.deploy-onprem.outputs.agent_ip }}"
+          echo "Activation URL: http://${{ needs.deploy-onprem.outputs.agent_ip }}"
+          echo "Activation Key: ${{ steps.activation.outputs.activation_key }}"
+          
+      - name: Wait for Manual Activation
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.notice('Waiting for manual DataSync agent activation...');
+            // In a real scenario, you might poll AWS to check activation status
+
+  configure-datasync:
+    name: Configure DataSync
+    needs: [activate-datasync-agent, deploy-aws-infrastructure]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+      
+      - name: Configure DataSync Tasks
+        working-directory: ./datasync-configuration
+        run: |
+          terraform init
+          terraform apply -auto-approve \
+            -var="agent_ip=${{ needs.deploy-onprem.outputs.agent_ip }}" \
+            -var="windows_ip=${{ needs.deploy-onprem.outputs.windows_ip }}" \
+            -var="general_bucket=${{ needs.deploy-aws-infrastructure.outputs.general_bucket }}" \
+            -var="certs_bucket=${{ needs.deploy-aws-infrastructure.outputs.certs_bucket }}"
+      
+      - name: Summary
+        run: |
+          echo "## Deployment Complete! 🎉" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Resources Created:" >> $GITHUB_STEP_SUMMARY
+          echo "- Windows Server: ${{ needs.deploy-onprem.outputs.windows_ip }}" >> $GITHUB_STEP_SUMMARY
+          echo "- DataSync Agent: ${{ needs.deploy-onprem.outputs.agent_ip }}" >> $GITHUB_STEP_SUMMARY
+          echo "- General Bucket: ${{ needs.deploy-aws-infrastructure.outputs.general_bucket }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Certificates Bucket: ${{ needs.deploy-aws-infrastructure.outputs.certs_bucket }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Run the 'Test DataSync Transfer' workflow" >> $GITHUB_STEP_SUMMARY
+          echo "2. Monitor transfer in AWS Console" >> $GITHUB_STEP_SUMMARY

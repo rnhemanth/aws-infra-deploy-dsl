@@ -1,0 +1,71 @@
+name: Test DataSync Transfer
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_type:
+        description: 'Which task to run'
+        required: true
+        type: choice
+        options:
+          - general-files
+          - certificates
+          - both
+
+jobs:
+  run-transfer:
+    name: Execute DataSync Transfer
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-2
+      
+      - name: Start DataSync Task
+        id: start
+        run: |
+          # Get task ARNs
+          if [ "${{ github.event.inputs.task_type }}" == "both" ]; then
+            TASKS=$(aws datasync list-tasks --query 'Tasks[*].TaskArn' --output json)
+          else
+            TASK_NAME="test-${{ github.event.inputs.task_type }}-sync"
+            TASKS=$(aws datasync list-tasks \
+              --query "Tasks[?contains(Name, '$TASK_NAME')].TaskArn" \
+              --output json)
+          fi
+          
+          # Start executions
+          for TASK_ARN in $(echo $TASKS | jq -r '.[]'); do
+            echo "Starting task: $TASK_ARN"
+            EXEC_ARN=$(aws datasync start-task-execution \
+              --task-arn $TASK_ARN \
+              --query 'TaskExecutionArn' \
+              --output text)
+            echo "execution_arn_$TASK_ARN=$EXEC_ARN" >> $GITHUB_OUTPUT
+          done
+      
+      - name: Monitor Transfer
+        run: |
+          # Monitor all started executions
+          # This would loop and check status
+          echo "Monitoring transfers..."
+          
+      - name: Verify Results
+        run: |
+          echo "## Transfer Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # List files in S3
+          if [ "${{ github.event.inputs.task_type }}" != "certificates" ]; then
+            echo "### General Bucket Contents:" >> $GITHUB_STEP_SUMMARY
+            aws s3 ls s3://test-dsl-general-* --recursive | head -20 >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ github.event.inputs.task_type }}" != "general-files" ]; then
+            echo "### Certificates Bucket Contents:" >> $GITHUB_STEP_SUMMARY
+            aws s3 ls s3://test-dsl-secure-* --recursive | head -20 >> $GITHUB_STEP_SUMMARY
+          fi

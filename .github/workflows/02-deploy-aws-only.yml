@@ -1,0 +1,45 @@
+name: Deploy AWS Infrastructure Only
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      deploy_buckets:
+        description: 'Deploy S3 buckets'
+        type: boolean
+        default: true
+      deploy_vpc:
+        description: 'Deploy VPC and endpoints'
+        type: boolean
+        default: true
+
+jobs:
+  deploy:
+    name: Deploy AWS Infrastructure
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}  # Better than keys
+          aws-region: eu-west-2
+      
+      - name: Deploy Infrastructure
+        working-directory: ./aws-infrastructure
+        run: |
+          terraform init
+          terraform apply -auto-approve \
+            -var="environment=${{ github.event.inputs.environment }}" \
+            -var="deploy_buckets=${{ github.event.inputs.deploy_buckets }}" \
+            -var="deploy_vpc=${{ github.event.inputs.deploy_vpc }}"
