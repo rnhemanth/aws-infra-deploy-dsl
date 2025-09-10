@@ -38,26 +38,46 @@ jobs:
       
       - name: Destroy DataSync Configuration
         working-directory: ./datasync-configuration
+        continue-on-error: true
         run: |
-          terraform init
-          terraform destroy -auto-approve || true
+          terraform init || true
+          terraform destroy -auto-approve \
+            -var="agent_ip=dummy" \
+            -var="windows_ip=dummy" \
+            -var="general_bucket=dummy" \
+            -var="certs_bucket=dummy" || true
       
       - name: Destroy Connectivity
         working-directory: ./connectivity
+        continue-on-error: true
         run: |
-          terraform init
-          terraform destroy -auto-approve || true
+          terraform init || true
+          terraform destroy -auto-approve \
+            -var="onprem_vpc_id=dummy" \
+            -var="aws_vpc_id=dummy" || true
       
       - name: Destroy AWS Infrastructure
         if: github.event.inputs.destroy_aws == 'true'
         working-directory: ./aws-infrastructure
+        continue-on-error: true
         run: |
-          terraform init
-          terraform destroy -auto-approve
+          terraform init || true
+          terraform destroy -auto-approve \
+            -var="environment=test" || true
       
       - name: Destroy On-Prem Simulation
         if: github.event.inputs.destroy_onprem == 'true'
         working-directory: ./on-premises
+        continue-on-error: true
         run: |
-          terraform init
-          terraform destroy -auto-approve
+          terraform init || true
+          terraform destroy -auto-approve || true
+      
+      - name: Manual Cleanup Reminder
+        run: |
+          echo "If any resources remain, check AWS Console for:"
+          echo "- EC2 instances"
+          echo "- VPCs and networking"
+          echo "- S3 buckets"
+          echo "- IAM roles"
+          echo "- KMS keys"
