@@ -1,0 +1,134 @@
+name: Cleanup On-Premises Only
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type CLEANUP to confirm'
+        required: true
+
+jobs:
+  cleanup-onprem:
+    name: Cleanup On-Premises Infrastructure
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'CLEANUP'
+    
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-2
+      
+      - name: Find On-Premises VPC
+        id: find_vpc
+        run: |
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=cidr-block,Values=10.100.0.0/16" --query 'Vpcs[0].VpcId' --output text)
+          echo "Found VPC: $VPC_ID"
+          echo "vpc_id=$VPC_ID" >> $GITHUB_OUTPUT
+      
+      - name: Delete Security Groups
+        run: |
+          VPC_ID="${{ steps.find_vpc.outputs.vpc_id }}"
+          if [ "$VPC_ID" != "None" ] && [ ! -z "$VPC_ID" ]; then
+            echo "Deleting security groups in VPC: $VPC_ID"
+            SG_IDS=$(aws ec2 describe-security-groups \
+              --filters "Name=vpc-id,Values=$VPC_ID" \
+              --query 'SecurityGroups[?GroupName!=`default`].GroupId' \
+              --output text)
+            
+            for sg_id in $SG_IDS; do
+              echo "Deleting security group: $sg_id"
+              aws ec2 delete-security-group --group-id $sg_id || echo "Failed to delete $sg_id"
+            done
+          fi
+      
+      - name: Delete Subnets
+        run: |
+          VPC_ID="${{ steps.find_vpc.outputs.vpc_id }}"
+          if [ "$VPC_ID" != "None" ] && [ ! -z "$VPC_ID" ]; then
+            echo "Deleting subnets in VPC: $VPC_ID"
+            SUBNET_IDS=$(aws ec2 describe-subnets \
+              --filters "Name=vpc-id,Values=$VPC_ID" \
+              --query 'Subnets[].SubnetId' \
+              --output text)
+            
+            for subnet_id in $SUBNET_IDS; do
+              echo "Deleting subnet: $subnet_id"
+              aws ec2 delete-subnet --subnet-id $subnet_id || echo "Failed to delete $subnet_id"
+            done
+          fi
+      
+      - name: Delete Route Tables
+        run: |
+          VPC_ID="${{ steps.find_vpc.outputs.vpc_id }}"
+          if [ "$VPC_ID" != "None" ] && [ ! -z "$VPC_ID" ]; then
+            echo "Deleting route tables in VPC: $VPC_ID"
+            RT_IDS=$(aws ec2 describe-route-tables \
+              --filters "Name=vpc-id,Values=$VPC_ID" \
+              --query 'RouteTables[?Associations[0].Main!=`true`].RouteTableId' \
+              --output text)
+            
+            for rt_id in $RT_IDS; do
+              echo "Deleting route table: $rt_id"
+              aws ec2 delete-route-table --route-table-id $rt_id || echo "Failed to delete $rt_id"
+            done
+          fi
+      
+      - name: Delete Internet Gateway
+        run: |
+          VPC_ID="${{ steps.find_vpc.outputs.vpc_id }}"
+          if [ "$VPC_ID" != "None" ] && [ ! -z "$VPC_ID" ]; then
+            echo "Deleting internet gateway in VPC: $VPC_ID"
+            IGW_IDS=$(aws ec2 describe-internet-gateways \
+              --filters "Name=attachment.vpc-id,Values=$VPC_ID" \
+              --query 'InternetGateways[].InternetGatewayId' \
+              --output text)
+            
+            for igw_id in $IGW_IDS; do
+              echo "Detaching and deleting IGW: $igw_id"
+              aws ec2 detach-internet-gateway --internet-gateway-id $igw_id --vpc-id $VPC_ID || echo "Failed to detach $igw_id"
+              aws ec2 delete-internet-gateway --internet-gateway-id $igw_id || echo "Failed to delete $igw_id"
+            done
+          fi
+      
+      - name: Delete VPC
+        run: |
+          VPC_ID="${{ steps.find_vpc.outputs.vpc_id }}"
+          if [ "$VPC_ID" != "None" ] && [ ! -z "$VPC_ID" ]; then
+            echo "Deleting VPC: $VPC_ID"
+            aws ec2 delete-vpc --vpc-id $VPC_ID || echo "Failed to delete $VPC_ID"
+          fi
+      
+      - name: Cleanup IAM Role (Fixed)
+        run: |
+          echo "Cleaning up IAM role..."
+          ROLE_NAME="test-datasync-role"
+          
+          # Check if role exists
+          if aws iam get-role --role-name $ROLE_NAME >/dev/null 2>&1; then
+            echo "Found role: $ROLE_NAME"
+            
+            # Delete inline policies with better error handling
+            aws iam list-role-policies --role-name $ROLE_NAME --output text --query 'PolicyNames[]' | while read policy_name; do
+              if [ ! -z "$policy_name" ] && [ "$policy_name" != "None" ]; then
+                echo "Deleting inline policy: $policy_name"
+                aws iam delete-role-policy --role-name $ROLE_NAME --policy-name "$policy_name" 2>/dev/null || echo "Policy already deleted or invalid"
+              fi
+            done
+            
+            # Delete the role
+            aws iam delete-role --role-name $ROLE_NAME || echo "Role already deleted"
+          else
+            echo "Role $ROLE_NAME not found"
+          fi
+      
+      - name: Final Check
+        run: |
+          echo "Checking for remaining on-premises resources..."
+          echo "VPCs with 10.100.0.0/16 CIDR:"
+          aws ec2 describe-vpcs --filters "Name=cidr-block,Values=10.100.0.0/16" --query 'Vpcs[].[VpcId,CidrBlock]' --output table || echo "No matching VPCs found"
+          
+          echo "Test IAM roles:"
+          aws iam list-roles --query 'Roles[?contains(RoleName, `test-`)].RoleName' --output table || echo "No test roles found"
