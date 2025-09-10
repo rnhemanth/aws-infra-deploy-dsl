@@ -1,0 +1,20 @@
+# DSL Migration Test Environment
+
+This repository sets up a test environment for DSL migration using AWS DataSync.
+
+## Prerequisites
+- AWS Account with appropriate permissions
+- GitHub repository secrets:
+  - AWS_ACCESS_KEY_ID
+  - AWS_SECRET_ACCESS_KEY
+
+## Usage
+1. Go to Actions tab
+2. Run "Deploy Test Environment" workflow
+3. Follow the manual activation steps when prompted
+4. Run "Test DataSync Transfer" to test the migration
+
+## Architecture
+- Simulated on-premises environment with Windows file shares
+- AWS infrastructure with S3 buckets and DataSync
+- VPC peering to simulate Direct Connect

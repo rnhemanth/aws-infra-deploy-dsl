@@ -136,17 +136,19 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Create Activation Key
-        id: activation
+      - name: Display Agent Activation Info
         run: |
-          # Get activation key from AWS
-          ACTIVATION_KEY=$(aws datasync create-agent \
-            --agent-name "test-dsl-agent" \
-            --vpc-endpoint-id vpce-xxxxxxxxx \
-            --subnet-arns arn:aws:ec2:${{ env.AWS_REGION }}:xxx:subnet/subnet-xxx \
-            --security-group-arns arn:aws:ec2:${{ env.AWS_REGION }}:xxx:security-group/sg-xxx \
-            --query 'ActivationKey' \
-            --output text)
+          echo "::notice title=Manual Action Required::Please activate the DataSync agent"
+          echo "Agent IP: ${{ needs.deploy-onprem.outputs.agent_ip }}"
+          echo "Activation URL: http://${{ needs.deploy-onprem.outputs.agent_ip }}"
+          echo ""
+          echo "1. Access the agent URL above"
+          echo "2. Get activation key from AWS Console"
+          echo "3. Complete activation"
+          echo "4. This job will wait for 5 minutes"
+          
+      - name: Wait for Manual Activation
+        run: sleep 300  # Wait 5 minutes for manual activation
           
           echo "activation_key=$ACTIVATION_KEY" >> $GITHUB_OUTPUT
       
