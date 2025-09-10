@@ -49,7 +49,28 @@ data "aws_ami" "datasync" {
 }
 
 # Key pair
+# Generate SSH key if not provided
+resource "tls_private_key" "test" {
+  count     = var.ssh_public_key == "" ? 1 : 0
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+# Key pair using either provided or generated key
 resource "aws_key_pair" "test" {
-  key_name   = "dsl-test-key"
-  public_key = file("~/.ssh/id_rsa.pub")
+  key_name   = "dsl-test-key-${random_string.suffix.result}"
+  public_key = var.ssh_public_key != "" ? var.ssh_public_key : tls_private_key.test[0].public_key_openssh
+}
+
+# Random suffix to avoid key name conflicts
+resource "random_string" "suffix" {
+  length  = 8
+  special = false
+  upper   = false
+}
+
+# Output the private key if generated
+output "private_key_pem" {
+  value     = var.ssh_public_key == "" ? tls_private_key.test[0].private_key_pem : null
+  sensitive = true
 }
