@@ -71,7 +71,7 @@ jobs:
       
       - name: Upload SSH Key as Artifact
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ssh-key
           path: on-premises/dsl-test-key.pem
